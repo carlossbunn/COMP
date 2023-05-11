@@ -1,12 +1,11 @@
 import Text.Parsec
 import qualified Text.Parsec.Token as T
 import Text.Parsec.Language
-import Text.Parsec.Token(identifier, braces)
+import Text.Parsec.Token(braces)
 import qualified Data.Functor.Identity
+import Text.ParserCombinators.Parsec
 import Text.Parsec.Expr
-    ( buildExpressionParser,
-      Assoc(AssocLeft),
-      Operator(Infix, Prefix) )
+import Data.Maybe
 
 type Id = String
 data Tipo = TDouble | TInt | TString | TVoid deriving Show
@@ -43,6 +42,7 @@ reserved      = T.reserved lexico
 reservedOp    = T.reservedOp lexico
 parens        = T.parens lexico
 natural       = T.natural lexico
+identifier   = T.identifier lexico
 
 tabela = [[prefix "-" Neg]
           , [binario "*" (:*:) AssocLeft, binario "/" (:/:) AssocLeft ]
@@ -71,30 +71,30 @@ expr = buildExpressionParser tabela fator
 exprL = buildExpressionParser tabelaL exprR
 exprR = do {e1 <- expr; o <- opR; Rel . o e1 <$> expr;}
 
+programa :: Parser Programa
 programa = do
   funcoes <- listaFuncoes
-  blocoPrincipal <- bloco
-  eof
-  return (funcoes, blocoPrincipal)
+  Prog funcoes [] [] <$> blocoPrincipal
 
+listaFuncoes:: Parser [Funcao]
 listaFuncoes = many funcao
 
-funcao :: Parsec String u (String, [String], Bloco)
+funcao :: Parser Funcao
 funcao = do
   tipo <- tipoRetorno
-  id <- identifier lexico
-  parametros <- declParametros
-  let idsParametros = map snd parametros
+  id <- identifier
+  parametros <- parens declParametros
+  let idsParametros = map (\(t, v) -> v :#: t) parametros
   blocoPrincipal <- bloco
-  return (id, idsParametros, blocoPrincipal)
+  return $ id :->: (idsParametros, tipo)
 
-tipoRetorno :: Parsec String u Tipo
+tipoRetorno :: Parser Tipo
 tipoRetorno = tipo <|> (reserved "void" >> return TVoid)
 
 declParametros :: Parsec String u [(Tipo, String)]
-declParametros = try (do
+declParametros = Text.Parsec.try (do
   tipoParam <- tipo
-  id <- identifier lexico
+  id <- identifier
   [outrosParams] <- parametros
   return $ (tipoParam, id) : outrosParams)
   <|> return []
@@ -102,27 +102,27 @@ declParametros = try (do
 parametros :: ParsecT String u Data.Functor.Identity.Identity [[(Tipo, String)]]
 parametros = option [] $ symbol "," >> many1 declParametros
 
-blocoPrincipal :: Parsec String u Bloco
+blocoPrincipal :: Parser Bloco
 blocoPrincipal = do
   symbol "{"
   cmds <- blocoPrincipal'
   symbol "}"
   return cmds
 
-blocoPrincipal' :: Parsec String u Bloco
+blocoPrincipal' :: Parser Bloco
 blocoPrincipal' = do
   decls <- option [] declaracoes
   cmds <- listaCmd
   return (concat decls ++ cmds)
 
-declaracoes = many $ try declaracao <|> skip
+declaracoes = many $ Text.Parsec.try declaracao <|> skip
   where
     declaracao = do
       t <- tipo
       ids <- listaId
       symbol ";"
       return $ map (\id -> Atrib id (defaultValue t)) ids
-    skip = manyTill anyChar (lookAhead $ try (tipo >> listaId >> symbol ";")) >> return []
+    skip = manyTill anyChar (lookAhead $ Text.Parsec.try (tipo >> listaId >> symbol ";")) >> return []
 
 defaultValue :: Tipo -> Expr
 defaultValue TInt = Const (CInt 0)
@@ -138,36 +138,36 @@ tipo = choice
   ]
 
 listaId = do
-  id <- identifier lexico
+  id <- identifier
   lista <- listaId' <|> return []
   return (id : lista)
 
 listaId' = do
   symbol ","
-  id <- identifier lexico
+  id <- identifier
   lista <- listaId' <|> return []
   return (id : lista)
   <|> return []
 
-bloco :: Parsec String u Bloco
+bloco :: Parser Bloco
 bloco = do
   symbol "{"
   cmds <- listaCmd
   symbol "}"
   return cmds
 
-listaCmd :: Parsec String u [Comando]
+listaCmd :: Parser [Comando]
 listaCmd = many comando
 
 chamadaFuncao :: Parsec String u Comando
 chamadaFuncao = do
-  nome <- identifier lexico
+  nome <- identifier
   args <- parens (listaParametros <|> return [])
   symbol ";"
   return $ Proc nome args
 
 listaParametros :: Parsec String u [Expr]
-listaParametros = try listaParametros' <|> return []
+listaParametros = Text.Parsec.try listaParametros' <|> return []
 
 listaParametros' :: Parsec String u [Expr]
 listaParametros' = expr `sepBy` symbol ","
@@ -176,34 +176,52 @@ listaParametros'' :: Parsec String u [Expr]
 listaParametros'' = (symbol "," >> listaParametros')
                     <|> return []
 
-comando = try (do reserved "return"
-                  e <- tvzExpr
-                  symbol ";"
-                  return (Ret e))
-        <|> try (do {reserved "if";
-                  e <- parens exprL;
-                  b1 <- bloco;
-                  reserved "else";
-                  If e b1 <$> bloco;})
-      <|> try (do reserved "while"
-                  e <- parens exprL
-                  While e <$> bloco)
-      <|> try (do i <- identifier lexico
-                  reservedOp "="
-                  e <- expr
-                  symbol ";"
-                  return (Atrib i e))
-      <|> try (do reserved "print"
-                  e <- parens expr
-                  symbol ";"
-                  return (Print e))
-      <|> try (do reserved "read"
-                  i <- parens (identifier lexico)
-                  symbol ";"
-                  return (ReadAction i))
-      <|> chamadaFuncao
+comando :: Parser Comando
+comando = choice [ Text.Parsec.try $ string "return" >> spaces >> (Ret <$> optionMaybe expr) <* char ';'
+                 , Text.Parsec.try $ do
+                     string "if"
+                     spaces
+                     condicao <- exprL
+                     spaces
+                     bloco1 <- bloco
+                     spaces
+                     elseOp <- optionMaybe (string "else" >> spaces >> bloco)
+                     return $ If condicao bloco1 (fromMaybe [] elseOp)
+                 , Text.Parsec.try $ do
+                     string "while"
+                     spaces
+                     condicao <- exprL
+                     spaces
+                     While condicao <$> bloco
+                 , Text.Parsec.try $ do
+                     ident <- identifier
+                     spaces
+                     char '='
+                     spaces
+                     exp <- expr
+                     char ';'
+                     return $ Atrib ident exp
+                 , Text.Parsec.try $ do
+                     string "print"
+                     spaces
+                     char '('
+                     exp <- expr
+                     char ')'
+                     char ';'
+                     return $ Print exp
+                 , Text.Parsec.try $ do
+                     string "read"
+                     spaces
+                     char '('
+                     ident <- identifier
+                     char ')'
+                     char ';'
+                     return $ Leitura ident
+                 , chamadaFuncao
+                 ]
 
-tvzExpr = optionMaybe expr
+tvzExpressao :: Parser (Maybe Expr)
+tvzExpressao = optionMaybe expr
 
-senao :: Parsec String u Bloco
+senao :: Parser Bloco
 senao = (reserved "else" >> listaCmd) <|> return []
