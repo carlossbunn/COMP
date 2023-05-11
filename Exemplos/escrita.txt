@@ -1,0 +1,29 @@
+S -> ListaFuncoes BlocoPrincipal
+ListaFuncoes -> Funcao ListaFuncoes | ε
+Funcao -> TipoRetorno id (DeclParametros) BlocoPrincipal
+TipoRetorno -> Tipo | void
+DeclParametros -> Tipo id Parametros | ε
+Parametros -> , DeclParametros | ε
+BlocoPrincipal -> { BlocoPrincipal’ }
+BlocoPrincipal’ -> Declaracoes ListaCmd
+Declaracoes -> Tipo ListaId; Declaracoes | ε
+Tipo -> int
+    | string
+    | double
+ListaId -> id ListaId’
+ListaId’ -> , ListaId | ε
+Bloco -> { ListaCmd }
+ListaCmd -> Comando ListaCmd | ε
+ChamadaFuncao -> id (ListaParametros)
+ListaParametros -> ListaParametros’
+ListaParametros’ -> Expressao ListaParametros’’
+ListaParametros’’ -> , ListaParametros’ | ε
+Comando -> return TvzExpressao;
+    | if (ExpressaoLogica) Bloco Senao
+    | while (ExpressaoLogica) Bloco
+    | id = Expressao;
+    | print (Expressao);
+    | read (id);
+    |ChamadaFuncao;
+TvzExpressao -> Expressao | ε
+Senao -> else Bloco | ε
