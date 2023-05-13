@@ -1,11 +1,11 @@
 import Text.Parsec
 import qualified Text.Parsec.Token as T
 import Text.Parsec.Language
-import Text.Parsec.Token(braces)
 import qualified Data.Functor.Identity
 import Text.ParserCombinators.Parsec
 import Text.Parsec.Expr
 import Data.Maybe
+
 
 type Id = String
 data Tipo = TDouble | TInt | TString | TVoid deriving Show
@@ -66,8 +66,8 @@ fator = parens expr
        <|> do {Const . CInt <$> natural;}
        <?> "simple expression"
 
-expr = buildExpressionParser tabela fator
-       <?> "expression"
+expr = buildExpressionParser tabela fator <?> "expression"
+
 exprL = buildExpressionParser tabelaL exprR
 exprR = do {e1 <- expr; o <- opR; Rel . o e1 <$> expr;}
 
@@ -76,8 +76,8 @@ programa = do
   funcoes <- listaFuncoes
   Prog funcoes [] [] <$> blocoPrincipal
 
-listaFuncoes:: Parser [Funcao]
-listaFuncoes = many funcao
+listaFuncoes :: Parser [Funcao]
+listaFuncoes = sepEndBy funcao (symbol ";")
 
 funcao :: Parser Funcao
 funcao = do
@@ -100,7 +100,7 @@ declParametros = Text.Parsec.try (do
   <|> return []
 
 parametros :: ParsecT String u Data.Functor.Identity.Identity [[(Tipo, String)]]
-parametros = option [] $ symbol "," >> many1 declParametros
+parametros = option [] $ symbol "," >> sepBy1 declParametros (symbol ",")
 
 blocoPrincipal :: Parser Bloco
 blocoPrincipal = do
@@ -111,18 +111,17 @@ blocoPrincipal = do
 
 blocoPrincipal' :: Parser Bloco
 blocoPrincipal' = do
-  decls <- option [] declaracoes
+  decls <- declaracoes <|> return []
   cmds <- listaCmd
   return (concat decls ++ cmds)
 
-declaracoes = many $ Text.Parsec.try declaracao <|> skip
-  where
-    declaracao = do
-      t <- tipo
-      ids <- listaId
-      symbol ";"
-      return $ map (\id -> Atrib id (defaultValue t)) ids
-    skip = manyTill anyChar (lookAhead $ Text.Parsec.try (tipo >> listaId >> symbol ";")) >> return []
+declaracoes = sepEndBy declaracao (symbol ";")
+
+declaracao = do
+  tipo <- tipo
+  ids <- listaId
+  symbol ";"
+  return $ map (\id -> Atrib id (defaultValue tipo)) ids
 
 defaultValue :: Tipo -> Expr
 defaultValue TInt = Const (CInt 0)
@@ -157,17 +156,17 @@ bloco = do
   return cmds
 
 listaCmd :: Parser [Comando]
-listaCmd = many comando
+listaCmd = sepEndBy comando (symbol ";")
 
 chamadaFuncao :: Parsec String u Comando
 chamadaFuncao = do
   nome <- identifier
-  args <- parens (listaParametros <|> return [])
+  args <- parens (listaParametros'' <|> return [])
   symbol ";"
   return $ Proc nome args
 
-listaParametros :: Parsec String u [Expr]
-listaParametros = Text.Parsec.try listaParametros' <|> return []
+listaParametros :: ParsecT String u Data.Functor.Identity.Identity [Expr]
+listaParametros = parens (expr `sepBy` symbol ",") <|> return []
 
 listaParametros' :: Parsec String u [Expr]
 listaParametros' = expr `sepBy` symbol ","
@@ -225,3 +224,34 @@ tvzExpressao = optionMaybe expr
 
 senao :: Parser Bloco
 senao = (reserved "else" >> listaCmd) <|> return []
+
+-- Função para analisar o programa e retornar a árvore sintática abstrata
+parsePrograma :: String -> Either ParseError Programa
+parsePrograma = parse programa ""
+
+-- Função de teste do analisador
+testParser :: String -> IO ()
+testParser input = case parsePrograma input of
+  Left err -> putStrLn $ "Erro de análise: " ++ show err
+  Right ast -> putStrLn $ "Árvore sintática abstrata:\n" ++ show ast
+
+
+main = do putStr "Expressão:"
+          e <- getLine
+          testParser e
+
+{- main :: IO ()
+main = do
+  let programaExemplo = unlines
+        [ "int soma(int a, int b) {"
+        , "    return a + b;"
+        , "}"
+        , ""
+        , "int main() {"
+        , "    int x = 10;"
+        , "    int y = 20;"
+        , "    int z = soma(x, y);"
+        , "    print(z);"
+        , "}"
+        ]
+  testParser programaExemplo -}
