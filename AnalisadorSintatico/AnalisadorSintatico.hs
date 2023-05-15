@@ -6,7 +6,6 @@ import Text.ParserCombinators.Parsec
 import Text.Parsec.Expr
 import Data.Maybe
 
-
 type Id = String
 data Tipo = TDouble | TInt | TString | TVoid deriving Show
 data TCons = CDouble Double | CInt Integer deriving Show
@@ -225,11 +224,9 @@ tvzExpressao = optionMaybe expr
 senao :: Parser Bloco
 senao = (reserved "else" >> listaCmd) <|> return []
 
--- Função para analisar o programa e retornar a árvore sintática abstrata
 parsePrograma :: String -> Either ParseError Programa
 parsePrograma = parse programa ""
 
--- Função de teste do analisador
 testParser :: String -> IO ()
 testParser input = case parsePrograma input of
   Left err -> putStrLn $ "Erro de análise: " ++ show err
@@ -239,19 +236,3 @@ testParser input = case parsePrograma input of
 main = do putStr "Expressão:"
           e <- getLine
           testParser e
-
-{- main :: IO ()
-main = do
-  let programaExemplo = unlines
-        [ "int soma(int a, int b) {"
-        , "    return a + b;"
-        , "}"
-        , ""
-        , "int main() {"
-        , "    int x = 10;"
-        , "    int y = 20;"
-        , "    int z = soma(x, y);"
-        , "    print(z);"
-        , "}"
-        ]
-  testParser programaExemplo -}
