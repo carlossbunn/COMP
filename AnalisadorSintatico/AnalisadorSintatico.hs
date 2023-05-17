@@ -1,10 +1,13 @@
 import Text.Parsec
 import qualified Text.Parsec.Token as T
-import Text.Parsec.Language
+import Text.Parsec.Language ( emptyDef )
 import qualified Data.Functor.Identity
-import Text.ParserCombinators.Parsec
+import Text.ParserCombinators.Parsec ( Parser )
 import Text.Parsec.Expr
-import Data.Maybe
+    ( buildExpressionParser,
+      Assoc(AssocLeft),
+      Operator(Infix, Prefix) )
+import Data.Maybe ( fromMaybe )
 
 type Id = String
 data Tipo = TDouble | TInt | TString | TVoid deriving Show
@@ -32,7 +35,7 @@ lingDef = emptyDef
             , T.commentEnd      = "-}"
             , T.commentLine     = "--"
             , T.reservedOpNames = ["{","}","+", "-", "/", "*", "==", "/=", "<", ">", "<=", ">=", "&", "|", "!"]
-            , T.reservedNames   = ["while", "return", "int", "string", "double"]
+            , T.reservedNames   = ["while", "return", "if", "int", "double", "string", "void", "if", "else", "print", "read"]
           }
 
 lexico = T.makeTokenParser lingDef
@@ -42,6 +45,11 @@ reservedOp    = T.reservedOp lexico
 parens        = T.parens lexico
 natural       = T.natural lexico
 identifier   = T.identifier lexico
+palavra = T.stringLiteral lexico
+num = T.naturalOrFloat lexico
+command = T.comma lexico
+pv = T.semi lexico
+braces = T.braces lexico
 
 tabela = [[prefix "-" Neg]
           , [binario "*" (:*:) AssocLeft, binario "/" (:/:) AssocLeft ]
@@ -61,79 +69,96 @@ opR = do {reservedOp "=="; return (:==:)}
 prefix   name fun = Prefix (do {reservedOp name; return fun })
 binario name fun = Infix (do {reservedOp name; return fun })
 
+list p = sepBy p comando
+
+fator :: Parsec String () Expr
 fator = parens expr
+     <|> do {c <- num; case c of Left  n -> return (Const (CInt n)); Right n -> return (Const (CDouble n))}
+     <|> do { i <- identifier; args <- parens (list expr); return (Chamada i args); }
+     <|> do { Lit <$> palavra; }
+     <|> do { IdVar <$> identifier; }
+     <?> "simple expression"
+
+{- fator = parens expr
        <|> do {Const . CInt <$> natural;}
-       <?> "simple expression"
+       <?> "simple expression" -}
 
 expr = buildExpressionParser tabela fator <?> "expression"
 
-exprL = buildExpressionParser tabelaL exprR
-exprR = do {e1 <- expr; o <- opR; Rel . o e1 <$> expr;}
+exprL = do {parens logico
+        <|> Rel
+        <$> exprR}
+exprR = do {e1 <- expr; o <- opR; o e1 <$> expr;}
+logico = buildExpressionParser tabelaL exprL
+      <?> "logical expression"
 
-programa :: Parser Programa
+programa:: Parser Programa
 programa = do
   funcoes <- listaFuncoes
-  Prog funcoes [] [] <$> blocoPrincipal
+  bloco <- blocoPrincipal
+  return $ Prog (fst funcoes) (snd funcoes) (fst bloco) (snd bloco)
 
-listaFuncoes :: Parser [Funcao]
-listaFuncoes = sepEndBy funcao (symbol ";")
+{- programa = do
+  funcoes <- listaFuncoes
+  m <- blocoPrincipal
+  Prog funcoes [] [] <$> blocoPrincipal -}
 
-funcao :: Parser Funcao
+listaFuncoes :: ParsecT String () Data.Functor.Identity.Identity ([Funcao], [(String, [Var], [Comando])])
+listaFuncoes = do {f <- many funcao;
+                  return (unzip f)}
+
+funcao ::  ParsecT String () Data.Functor.Identity.Identity(Funcao, (String, [Var], [Comando]))
 funcao = do
-  tipo <- tipoRetorno
-  id <- identifier
-  parametros <- parens declParametros
-  let idsParametros = map (\(t, v) -> v :#: t) parametros
-  blocoPrincipal <- bloco
-  return $ id :->: (idsParametros, tipo)
+    tipo <- tipoRetorno
+    id <- identifier
+    p <- parens parametros
+    blocoCmds <- braces bloco
+    return (id :->: (p, tipo), (id, fst blocoCmds, snd blocoCmds))
 
-tipoRetorno :: Parser Tipo
 tipoRetorno = tipo <|> (reserved "void" >> return TVoid)
 
-declParametros :: Parsec String u [(Tipo, String)]
-declParametros = Text.Parsec.try (do
+declParametros = try (do
+    param <- parametro
+    outrosParams <- parametros
+    pv
+    return (param : outrosParams)
+  ) <|> return []
+
+parametros = sepBy parametro (symbol ",")
+
+parametro = do
   tipoParam <- tipo
-  id <- identifier
-  [outrosParams] <- parametros
-  return $ (tipoParam, id) : outrosParams)
-  <|> return []
+  nome <- identifier
+  return (nome :#: tipoParam)
 
-parametros :: ParsecT String u Data.Functor.Identity.Identity [[(Tipo, String)]]
-parametros = option [] $ symbol "," >> sepBy1 declParametros (symbol ",")
-
-blocoPrincipal :: Parser Bloco
+blocoPrincipal :: ParsecT String () Data.Functor.Identity.Identity ([Var], [Comando])
 blocoPrincipal = do
   symbol "{"
-  cmds <- blocoPrincipal'
+  blocoPrincipal' <- blocoPrincipal'
   symbol "}"
-  return cmds
+  return blocoPrincipal'
 
-blocoPrincipal' :: Parser Bloco
+blocoPrincipal' :: ParsecT String () Data.Functor.Identity.Identity ([Var], [Comando])
 blocoPrincipal' = do
-  decls <- declaracoes <|> return []
+  decls <- declaracoes
   cmds <- listaCmd
-  return (concat decls ++ cmds)
+  return (decls,snd cmds)
+{- blocoPrincipal' = do
+  declaracoes <- declaracoes
+  listaCmd <- listaCmd
+  return (declaracoes ++ listaCmd) -}
 
-declaracoes = sepEndBy declaracao (symbol ";")
-
-declaracao = do
+declaracoes :: Parser [Var]
+declaracoes = do
   tipo <- tipo
   ids <- listaId
-  symbol ";"
-  return $ map (\id -> Atrib id (defaultValue tipo)) ids
+  pv
+  return (map (:#: tipo) ids)
 
-defaultValue :: Tipo -> Expr
-defaultValue TInt = Const (CInt 0)
-defaultValue TDouble = Const (CDouble 0.0)
-defaultValue TString = Lit ""
-defaultValue TVoid = error "Tipo void não tem valor padrão"
-
-tipo :: Parsec String u Tipo
-tipo = choice
-  [ reserved "int" >> return TInt
-  , reserved "string" >> return TString
-  , reserved "double" >> return TDouble
-  ]
+tipo = do {( reserved "int" >> return TInt)
+   <|> (reserved "string" >> return TString)
+   <|> (reserved "double" >> return TDouble)
+   <?> "type"}
 
 listaId = do
   id <- identifier
@@ -147,82 +172,84 @@ listaId' = do
   return (id : lista)
   <|> return []
 
-bloco :: Parser Bloco
+
 bloco = do
   symbol "{"
   cmds <- listaCmd
   symbol "}"
   return cmds
 
-listaCmd :: Parser [Comando]
-listaCmd = sepEndBy comando (symbol ";")
+listaCmd :: Parser ([Var], [Comando])
+listaCmd = do
+  decls <- many declaracoes
+  cmds <- many comando
+  return (concat decls, cmds)
+{- listaCmd = do
+          d <- many declaracoes
+          c <- many comando
+          return (concat d ++ c) -}
 
-chamadaFuncao :: Parsec String u Comando
 chamadaFuncao = do
   nome <- identifier
   args <- parens (listaParametros'' <|> return [])
   symbol ";"
   return $ Proc nome args
 
-listaParametros :: ParsecT String u Data.Functor.Identity.Identity [Expr]
-listaParametros = parens (expr `sepBy` symbol ",") <|> return []
+listaParametros = parens (expr `sepBy` symbol ",")
 
-listaParametros' :: Parsec String u [Expr]
 listaParametros' = expr `sepBy` symbol ","
 
-listaParametros'' :: Parsec String u [Expr]
 listaParametros'' = (symbol "," >> listaParametros')
                     <|> return []
 
-comando :: Parser Comando
+bloco' :: ParsecT String () Data.Functor.Identity.Identity Bloco
+bloco' = do
+  symbol "{"
+  cmds <- listaCmd
+  symbol "}"
+  return (snd cmds)
+
 comando = choice [ Text.Parsec.try $ string "return" >> spaces >> (Ret <$> optionMaybe expr) <* char ';'
                  , Text.Parsec.try $ do
                      string "if"
                      spaces
-                     condicao <- exprL
+                     condicao <- parens logico
                      spaces
                      bloco1 <- bloco
                      spaces
                      elseOp <- optionMaybe (string "else" >> spaces >> bloco)
-                     return $ If condicao bloco1 (fromMaybe [] elseOp)
+                     return (If condicao (snd bloco1) [])
                  , Text.Parsec.try $ do
                      string "while"
-                     spaces
                      condicao <- exprL
-                     spaces
-                     While condicao <$> bloco
+                     While condicao <$> bloco'
                  , Text.Parsec.try $ do
                      ident <- identifier
                      spaces
                      char '='
                      spaces
                      exp <- expr
-                     char ';'
-                     return $ Atrib ident exp
+                     pv
+                     return (Atrib ident exp)
                  , Text.Parsec.try $ do
                      string "print"
                      spaces
-                     char '('
-                     exp <- expr
-                     char ')'
-                     char ';'
-                     return $ Print exp
+                     exp <- parens expr
+                     pv
+                     return (Print exp)
                  , Text.Parsec.try $ do
                      string "read"
                      spaces
-                     char '('
-                     ident <- identifier
-                     char ')'
-                     char ';'
-                     return $ Leitura ident
+                     ident <- parens identifier
+                     pv
+                     return (Leitura ident)
                  , chamadaFuncao
                  ]
 
-tvzExpressao :: Parser (Maybe Expr)
+
 tvzExpressao = optionMaybe expr
 
-senao :: Parser Bloco
-senao = (reserved "else" >> listaCmd) <|> return []
+senao = reserved "else" >> listaCmd
 
 parsePrograma :: String -> Either ParseError Programa
 parsePrograma = parse programa ""
@@ -232,7 +259,6 @@ testParser input = case parsePrograma input of
   Left err -> putStrLn $ "Erro de análise: " ++ show err
   Right ast -> putStrLn $ "Árvore sintática abstrata:\n" ++ show ast
 
-
-main = do putStr "Expressão:"
-          e <- getLine
-          testParser e
+main = do
+        e <- readFile "prog1.diq"
+        testParser e

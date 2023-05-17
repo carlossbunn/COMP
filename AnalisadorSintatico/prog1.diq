@@ -1,0 +1,27 @@
+int foo(int u, double x) {
+	int z;
+	int y;
+	z = 10;
+	y = z+x;
+	return u+z;
+}
+
+{
+	int x;
+	int a,b;
+	foo(2, 2.0);
+	read(x);
+	print(foo(x, 2.0));
+	a = 3;
+	b = 4;
+	if (a < b) {
+		return 1;
+	} else {
+		while (a < b) {
+			if (a < b) {
+				a = b+1;
+            		}
+		}
+	}
+	return 0;
+}
