@@ -263,12 +263,12 @@ tvzExpressao = do
 
 senao = braces (many comando)
 
-program = do
+parserPrograma = do
       e <- programa
       eof
       return e
 
-parser string = case runParser programa [] "Expressions" string of
+parser string = case runParser parserPrograma [] "Expressions" string of
     Left error -> print error
     Right x -> print x
 
