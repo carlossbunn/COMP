@@ -218,7 +218,7 @@ comando :: Parsec String u Comando
 comando = do
         cif
     <|> cwhile
-    <|> catriborfunc
+    <|> try (catriborfunc)
     <|> cread
     <|> cprint
     <|> creturn
