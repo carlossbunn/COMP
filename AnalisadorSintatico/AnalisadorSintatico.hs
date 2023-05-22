@@ -4,6 +4,7 @@ import Text.Parsec.Language ( emptyDef )
 import qualified Text.Parsec.Token as T
 import Text.Parsec.Expr
 
+-- Definição de dados
 type Id = String
 data Tipo = TDouble | TInt | TString | TVoid deriving Show
 data TCons = CDouble Double | CInt Integer deriving Show
@@ -23,6 +24,7 @@ data Comando = If ExprL Bloco Bloco
                 | Proc Id [Expr]
                 deriving Show
 
+--Definição da linguagem
 lingDef = emptyDef
           { T.commentStart      = "{-"
             , T.commentEnd      = "-}"
@@ -32,7 +34,7 @@ lingDef = emptyDef
           }
 
 lexico = T.makeTokenParser lingDef
-
+-- Tokens
 symbol = T.symbol lexico
 reserved = T.reserved lexico
 reservedOp = T.reservedOp lexico
@@ -59,7 +61,7 @@ opR = do {(reservedOp "==" >> return (:==:))
       <|> (reservedOp ">" >> return (:>:))
       <|> (reservedOp "<" >> return (:<:))
       <|> (reservedOp "/=" >> return (:/=:))
-      <?> "operador relacional"}
+      <?> "relational operator"}
 
 prefix name fun = Prefix (do {reservedOp name; return fun })
 binario name fun = Infix (do {reservedOp name; return fun })
@@ -87,14 +89,13 @@ exprR = do {e1 <- expr; o <- opR; o e1 <$> expr;}
 logico = buildExpressionParser tabelaL exprL
       <?> "logical expression"
 
--- data Programa = Prog [Funcao] [(Id, [Var], Bloco)] [Var] Bloco
 programa :: Parsec String u Programa
 programa = do
-        blocoF <- listaFuncoes
+        listaF <- listaFuncoes
         (var, bloco) <- blocoPrincipal
-        let (f, _, _) = unzip3 blocoF
-            t = aux blocoF
-        return $ Prog f t var bloco
+        let (func, _, _) = unzip3 listaF
+            lf = aux listaF
+        return $ Prog func lf var bloco
 
 aux [] = []
 aux ((id :->: t, v, b) : ts) = (id, v, b) : aux ts
@@ -104,7 +105,7 @@ listaFuncoes = do
         func <- funcao
         restoFunc <- listaFuncoes
         return $ func : restoFunc
-        <|> do return []
+        <|> return []
 
 funcao :: Parsec String u (Funcao, [Var], [Comando])
 funcao = do
@@ -163,7 +164,7 @@ listaId :: Parsec String u [String]
 listaId = do
   id <- identifier
   lista <- listaId'
-  return $ id : lista
+  return (id : lista)
 
 listaId' :: Parsec String u [String]
 listaId' = do
@@ -186,7 +187,7 @@ chamadaFuncao = do
   nome <- identifier
   args <- parens listaParametros
   pv
-  return $ Proc nome args
+  return (Proc nome args)
 
 listaParametros :: Parsec String u [Expr]
 listaParametros = do
@@ -205,6 +206,14 @@ listaParametros'' = do
             listaParametros'
             <|> return []
 
+tvzExpressao :: Parsec String u (Maybe Expr)
+tvzExpressao = do
+        Just <$> expr
+        <|> return Nothing
+
+senao :: Parsec String u [Comando]
+senao = braces (many comando)
+
 comando :: Parsec String u Comando
 comando = do
         cif
@@ -214,11 +223,11 @@ comando = do
     <|> cprint
     <|> creturn
     
-creturn = do
+creturn = try(do
         reserved "return"
         tvz <- tvzExpressao
         pv
-        return (Ret tvz)
+        return (Ret tvz))
 
 cprint = do
         reserved "print"
@@ -230,14 +239,14 @@ cread = do
         reserved "read"
         id <- parens identifier
         pv
-        return $ Leitura id
+        return (Leitura id)
 
 catriborfunc = try (do
         ident <- identifier
         reserved "="
         expre <- expr
         pv
-        return $ Atrib ident expre)
+        return (Atrib ident expre))
         <|> chamadaFuncao
 
 cwhile = do
@@ -257,12 +266,7 @@ cif = try(do
             bloco <- bloco
             return (If expreLogica bloco [])
 
-tvzExpressao = do
-        Just <$> expr
-        <|> return Nothing
-
-senao = braces (many comando)
-
+-- Para executar o arquivo prog1.diq
 parserPrograma = do
       e <- programa
       eof
@@ -275,4 +279,3 @@ parser string = case runParser parserPrograma [] "Expressions" string of
 main = do
     e <- readFile "prog1.diq"
     parser e
-
