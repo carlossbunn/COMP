@@ -3,7 +3,7 @@ int foo(int u, double x) {
 	int y;
 	z = 10;
 	y = z+x;
-	return (u+z);
+	return u+z;
 }
 
 {
@@ -15,7 +15,7 @@ int foo(int u, double x) {
 	a = 3;
 	b = 4;
 	if (a < b) {
-		return (1);
+		return 1;
 	} else {
 		while (a < b) {
 			if (a < b) {
@@ -23,5 +23,5 @@ int foo(int u, double x) {
             		}
 		}
 	}
-	return (0);
+	return 0;
 }
