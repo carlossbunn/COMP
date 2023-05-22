@@ -277,5 +277,5 @@ parser string = case runParser parserPrograma [] "Expressions" string of
     Right x -> print x
 
 main = do
-    e <- readFile "prog1.diq"
+    e <- readFile "prog1.txt"
     parser e
