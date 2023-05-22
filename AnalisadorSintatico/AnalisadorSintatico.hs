@@ -1,13 +1,8 @@
+-- Alunos: Carlos Bunn e Paulo Ricardo
 import Text.Parsec
-import qualified Text.Parsec.Token as T
 import Text.Parsec.Language ( emptyDef )
-import qualified Data.Functor.Identity
-import Text.ParserCombinators.Parsec ( Parser )
+import qualified Text.Parsec.Token as T
 import Text.Parsec.Expr
-    ( buildExpressionParser,
-      Assoc(AssocLeft),
-      Operator(Infix, Prefix) )
-import Data.Maybe ( fromMaybe )
 
 type Id = String
 data Tipo = TDouble | TInt | TString | TVoid deriving Show
@@ -26,239 +21,258 @@ data Comando = If ExprL Bloco Bloco
                 | Imp Expr
                 | Ret (Maybe Expr)
                 | Proc Id [Expr]
-                | Print Expr
-                | ReadAction String
-                    deriving Show
+                deriving Show
 
 lingDef = emptyDef
           { T.commentStart      = "{-"
             , T.commentEnd      = "-}"
             , T.commentLine     = "--"
             , T.reservedOpNames = ["{","}","+", "-", "/", "*", "==", "/=", "<", ">", "<=", ">=", "&", "|", "!"]
-            , T.reservedNames   = ["while", "return", "if", "int", "double", "string", "void", "if", "else", "print", "read"]
+            , T.reservedNames   = ["while", "if", "int", "double", "string", "void", "print", "read"]
           }
 
 lexico = T.makeTokenParser lingDef
+
 symbol = T.symbol lexico
-reserved      = T.reserved lexico
-reservedOp    = T.reservedOp lexico
-parens        = T.parens lexico
-natural       = T.natural lexico
-identifier   = T.identifier lexico
+reserved = T.reserved lexico
+reservedOp = T.reservedOp lexico
+parens = T.parens lexico
+natural = T.natural lexico
+identifier = T.identifier lexico
 palavra = T.stringLiteral lexico
 num = T.naturalOrFloat lexico
 command = T.comma lexico
 pv = T.semi lexico
 braces = T.braces lexico
 
-tabela = [[prefix "-" Neg]
-          , [binario "*" (:*:) AssocLeft, binario "/" (:/:) AssocLeft ]
-          , [binario "+" (:+:) AssocLeft, binario "-" (:-:) AssocLeft ]
-         ]
-tabelaL   = [[prefix "!" Not]
-            , [binario "&" (:&:) AssocLeft]
-            , [binario "|" (:|:) AssocLeft]
-            ]
-opR = do {reservedOp "=="; return (:==:)}
-    <|> do {reservedOp "/="; return (:/=:)}
-    <|> do {reservedOp "<"; return (:<:)}
-    <|> do {reservedOp ">"; return (:>:)}
-    <|> do {reservedOp ">="; return (:>=:)}
-    <|> do {reservedOp "<="; return (:<=:)}
+tabela = [[prefix "-" Neg], 
+        [binario "*" (:*:) AssocLeft, binario "/" (:/:) AssocLeft ], 
+        [binario "+" (:+:) AssocLeft, binario "-" (:-:) AssocLeft ]]
 
-prefix   name fun = Prefix (do {reservedOp name; return fun })
+tabelaL = [[prefix "!" Not],
+    [binario "&&" (:&:) AssocLeft,
+     binario "||" (:|:) AssocLeft]]
+
+opR = do {(reservedOp "==" >> return (:==:))
+      <|> (reservedOp ">=" >> return (:>=:))
+      <|> (reservedOp "<=" >> return (:<=:))
+      <|> (reservedOp ">" >> return (:>:))
+      <|> (reservedOp "<" >> return (:<:))
+      <|> (reservedOp "/=" >> return (:/=:))
+      <?> "operador relacional"}
+
+prefix name fun = Prefix (do {reservedOp name; return fun })
 binario name fun = Infix (do {reservedOp name; return fun })
 
-list p = sepBy p comando
+list p = sepBy p command
 
-fator :: Parsec String () Expr
-fator = parens expr
-     <|> do {c <- num; case c of Left  n -> return (Const (CInt n)); Right n -> return (Const (CDouble n))}
-     <|> do { i <- identifier; args <- parens (list expr); return (Chamada i args); }
-     <|> do { Lit <$> palavra; }
-     <|> do { IdVar <$> identifier; }
-     <?> "simple expression"
+fator = do parens expr
+        <|> constant
+        <|> Lit <$> palavra
+        <|> try (do
+            i <- identifier;
+            args <- parens (list expr)
+            return (Chamada i args))
+        <|> IdVar <$> identifier
+        <?> "simple expression"
 
-{- fator = parens expr
-       <|> do {Const . CInt <$> natural;}
-       <?> "simple expression" -}
+constant = do {c <- num; case c of Left  n -> return (Const (CInt n)); Right n -> return (Const (CDouble n))}
 
-expr = buildExpressionParser tabela fator <?> "expression"
+expr = buildExpressionParser tabela fator 
+        <?> "expression"
 
-exprL = do {parens logico
-        <|> Rel
-        <$> exprR}
+exprL = parens logico <|> Rel <$> exprR
+        <?> "logical expression"
 exprR = do {e1 <- expr; o <- opR; o e1 <$> expr;}
 logico = buildExpressionParser tabelaL exprL
       <?> "logical expression"
 
-programa:: Parser Programa
+-- data Programa = Prog [Funcao] [(Id, [Var], Bloco)] [Var] Bloco
+programa :: Parsec String u Programa
 programa = do
-  funcoes <- listaFuncoes
-  bloco <- blocoPrincipal
-  return $ Prog (fst funcoes) (snd funcoes) (fst bloco) (snd bloco)
+        blocoF <- listaFuncoes
+        (var, bloco) <- blocoPrincipal
+        let (f, _, _) = unzip3 blocoF
+            t = aux blocoF
+        return $ Prog f t var bloco
 
-{- programa = do
-  funcoes <- listaFuncoes
-  m <- blocoPrincipal
-  Prog funcoes [] [] <$> blocoPrincipal -}
+aux [] = []
+aux ((id :->: t, v, b) : ts) = (id, v, b) : aux ts
 
-listaFuncoes :: ParsecT String () Data.Functor.Identity.Identity ([Funcao], [(String, [Var], [Comando])])
-listaFuncoes = do {f <- many funcao;
-                  return (unzip f)}
+listaFuncoes :: Parsec String u [(Funcao, [Var], [Comando])]
+listaFuncoes = do
+        func <- funcao
+        restoFunc <- listaFuncoes
+        return $ func : restoFunc
+        <|> do return []
 
-funcao ::  ParsecT String () Data.Functor.Identity.Identity(Funcao, (String, [Var], [Comando]))
+funcao :: Parsec String u (Funcao, [Var], [Comando])
 funcao = do
-    tipo <- tipoRetorno
+    tipoR <- tipoRetorno
     id <- identifier
-    p <- parens parametros
-    blocoCmds <- braces bloco
-    return (id :->: (p, tipo), (id, fst blocoCmds, snd blocoCmds))
+    p <- parens declParametros
+    (vars, bloco) <- blocoPrincipal
+    let func = id :->: (p, tipoR)
+    return (func, vars, bloco)
 
-tipoRetorno = tipo <|> (reserved "void" >> return TVoid)
+tipoRetorno :: Parsec String u Tipo
+tipoRetorno = do tipo <|> do reserved "void" >> return TVoid
 
-declParametros = try (do
-    param <- parametro
-    outrosParams <- parametros
-    pv
-    return (param : outrosParams)
-  ) <|> return []
-
-parametros = sepBy parametro (symbol ",")
-
-parametro = do
-  tipoParam <- tipo
-  nome <- identifier
-  return (nome :#: tipoParam)
-
-blocoPrincipal :: ParsecT String () Data.Functor.Identity.Identity ([Var], [Comando])
-blocoPrincipal = do
-  symbol "{"
-  blocoPrincipal' <- blocoPrincipal'
-  symbol "}"
-  return blocoPrincipal'
-
-blocoPrincipal' :: ParsecT String () Data.Functor.Identity.Identity ([Var], [Comando])
-blocoPrincipal' = do
-  decls <- declaracoes
-  cmds <- listaCmd
-  return (decls,snd cmds)
-{- blocoPrincipal' = do
-  declaracoes <- declaracoes
-  listaCmd <- listaCmd
-  return (declaracoes ++ listaCmd) -}
-
-declaracoes :: Parser [Var]
-declaracoes = do
-  tipo <- tipo
-  ids <- listaId
-  pv
-  return (map (:#: tipo) ids)
-
+tipo :: Parsec String u  Tipo
 tipo = do {( reserved "int" >> return TInt)
    <|> (reserved "string" >> return TString)
    <|> (reserved "double" >> return TDouble)
    <?> "type"}
 
-listaId = do
-  id <- identifier
-  lista <- listaId' <|> return []
-  return (id : lista)
+declParametros :: Parsec String u [Var]
+declParametros = do
+    tipo <- tipo
+    id <- identifier
+    params <- parametros
+    return $ (id :#: tipo) : params
+    <|> do reserved "void" >> return []
 
-listaId' = do
-  symbol ","
-  id <- identifier
-  lista <- listaId' <|> return []
-  return (id : lista)
+parametros :: Parsec String u [Var]
+parametros = do
+    command;
+    declParametros;
+    <|> return []
+
+blocoPrincipal :: Parsec String u ([Var], [Comando])
+blocoPrincipal = braces blocoPrincipal'
+
+blocoPrincipal' :: Parsec String u ([Var], [Comando])
+blocoPrincipal' = do
+    decls <- declaracoes
+    cmds <- listaCmd
+    return (decls, cmds)
+
+declaracoes :: Parsec String u [Var]
+declaracoes = do
+  t <- tipo;
+  ids <- listaId;
+  pv;
+  decls <- declaracoes;
+  return $ aux2 (t, ids);
   <|> return []
 
+aux2 (tipo, []) = []
+aux2 (tipo, id : ids) = (id :#: tipo) : aux2 (tipo, ids)
 
-bloco = do
-  symbol "{"
-  cmds <- listaCmd
-  symbol "}"
-  return cmds
+listaId :: Parsec String u [String]
+listaId = do
+  id <- identifier
+  lista <- listaId'
+  return $ id : lista
 
-listaCmd :: Parser ([Var], [Comando])
+listaId' :: Parsec String u [String]
+listaId' = do
+  command
+  listaId
+  <|> return []
+
+bloco :: Parsec String u [Comando]
+bloco = braces listaCmd
+
+listaCmd :: Parsec String u [Comando]
 listaCmd = do
-  decls <- many declaracoes
-  cmds <- many comando
-  return (concat decls, cmds)
-{- listaCmd = do
-          d <- many declaracoes
-          c <- many comando
-          return (concat d ++ c) -}
+  comandos <- comando
+  cmds <- listaCmd
+  return (comandos: cmds)
+  <|> return []
 
+chamadaFuncao :: Parsec String u Comando
 chamadaFuncao = do
   nome <- identifier
-  args <- parens (listaParametros'' <|> return [])
-  symbol ";"
+  args <- parens listaParametros
+  pv
   return $ Proc nome args
 
-listaParametros = parens (expr `sepBy` symbol ",")
+listaParametros :: Parsec String u [Expr]
+listaParametros = do
+        listaParametros'
+        <|> return []
 
-listaParametros' = expr `sepBy` symbol ","
+listaParametros' :: Parsec String u [Expr]
+listaParametros' = do
+            expressao <- expr
+            listaP <- listaParametros''
+            return $ expressao : listaP
 
-listaParametros'' = (symbol "," >> listaParametros')
-                    <|> return []
+listaParametros'' :: Parsec String u [Expr]
+listaParametros'' = do
+            command
+            listaParametros'
+            <|> return []
 
-bloco' :: ParsecT String () Data.Functor.Identity.Identity Bloco
-bloco' = do
-  symbol "{"
-  cmds <- listaCmd
-  symbol "}"
-  return (snd cmds)
+comando :: Parsec String u Comando
+comando = do
+        cif
+    <|> cwhile
+    <|> catriborfunc
+    <|> cread
+    <|> cprint
+    <|> creturn
+    
+creturn = do
+        reserved "return"
+        tvz <- tvzExpressao
+        pv
+        return (Ret tvz)
 
-comando = choice [ Text.Parsec.try $ string "return" >> spaces >> (Ret <$> optionMaybe expr) <* char ';'
-                 , Text.Parsec.try $ do
-                     string "if"
-                     spaces
-                     condicao <- parens logico
-                     spaces
-                     bloco1 <- bloco
-                     spaces
-                     elseOp <- optionMaybe (string "else" >> spaces >> bloco)
-                     return (If condicao (snd bloco1) [])
-                 , Text.Parsec.try $ do
-                     string "while"
-                     condicao <- exprL
-                     While condicao <$> bloco'
-                 , Text.Parsec.try $ do
-                     ident <- identifier
-                     spaces
-                     char '='
-                     spaces
-                     exp <- expr
-                     pv
-                     return (Atrib ident exp)
-                 , Text.Parsec.try $ do
-                     string "print"
-                     spaces
-                     exp <- parens expr
-                     pv
-                     return (Print exp)
-                 , Text.Parsec.try $ do
-                     string "read"
-                     spaces
-                     ident <- parens identifier
-                     pv
-                     return (Leitura ident)
-                 , chamadaFuncao
-                 ]
+cprint = do
+        reserved "print"
+        expre <- parens expr
+        pv
+        return (Imp expre)
 
+cread = do
+        reserved "read"
+        id <- parens identifier
+        pv
+        return $ Leitura id
 
-tvzExpressao = optionMaybe expr
+catriborfunc = try (do
+        ident <- identifier
+        reserved "="
+        expre <- expr
+        pv
+        return $ Atrib ident expre)
+        <|> chamadaFuncao
 
-senao = reserved "else" >> listaCmd
+cwhile = do
+        reserved "while"
+        condicao <- parens logico
+        While condicao <$> bloco
 
-parsePrograma :: String -> Either ParseError Programa
-parsePrograma = parse programa ""
+cif = try(do
+        reserved "if"
+        expreLogica <- parens logico
+        bloco <- bloco
+        reserved "else"
+        If expreLogica bloco <$> senao)
+        <|> do 
+            reserved "if"
+            expreLogica <- parens logico
+            bloco <- bloco
+            return (If expreLogica bloco [])
 
-testParser :: String -> IO ()
-testParser input = case parsePrograma input of
-  Left err -> putStrLn $ "Erro de análise: " ++ show err
-  Right ast -> putStrLn $ "Árvore sintática abstrata:\n" ++ show ast
+tvzExpressao = do
+        Just <$> expr
+        <|> return Nothing
+
+senao = braces (many comando)
+
+program = do
+      e <- programa
+      eof
+      return e
+
+parser string = case runParser programa [] "Expressions" string of
+    Left error -> print error
+    Right x -> print x
 
 main = do
-        e <- readFile "prog1.diq"
-        testParser e
+    e <- readFile "prog1.diq"
+    parser e
+
